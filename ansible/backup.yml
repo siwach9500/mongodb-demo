@@ -1,0 +1,43 @@
+- name: Backup MongoDB to S3
+  hosts: mongo-1
+  become: true
+
+  tasks:
+    - name: Install AWS CLI on the server
+      ansible.builtin.apt:
+        name: awscli
+        update_cache: true
+
+    - name: Make a file name with date and time
+      ansible.builtin.set_fact:
+        backup_file: "mongo-backup-{{ ansible_date_time.iso8601_basic_short }}.gz"
+
+    - name: Run mongodump
+      ansible.builtin.command:
+        argv:
+          - mongodump
+          - "--uri=mongodb://{{ mongo_private_ip }}:27017/?replicaSet=rs0"
+          - --gzip
+          - "--archive=/tmp/{{ backup_file }}"
+
+    - name: Upload the dump to S3
+      ansible.builtin.command: >
+        aws s3 cp /tmp/{{ backup_file }}
+        s3://{{ ansible_aws_ssm_bucket_name }}/backups/{{ backup_file }}
+        --region {{ ansible_aws_ssm_region }}
+
+    - name: Delete the local copy
+      ansible.builtin.file:
+        path: "/tmp/{{ backup_file }}"
+        state: absent
+
+    - name: List backups in S3
+      ansible.builtin.command: >
+        aws s3 ls s3://{{ ansible_aws_ssm_bucket_name }}/backups/
+        --region {{ ansible_aws_ssm_region }}
+      register: backups
+      changed_when: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ backups.stdout_lines }}"

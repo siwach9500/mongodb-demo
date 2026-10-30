@@ -1,0 +1,119 @@
+- name: Build MongoDB replica set
+  hosts: role_mongodb
+  become: true
+  vars:
+    mongo_version: "7.0"
+
+  tasks:
+    - name: Install packages needed for the repo
+      ansible.builtin.apt:
+        name: [gnupg, curl, ca-certificates]
+        update_cache: true
+
+    - name: Add MongoDB GPG key
+      ansible.builtin.get_url:
+        url: "https://www.mongodb.org/static/pgp/server-{{ mongo_version }}.asc"
+        dest: "/usr/share/keyrings/mongodb-{{ mongo_version }}.asc"
+
+    - name: Add MongoDB repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mongodb-{{ mongo_version }}.asc] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/{{ mongo_version }} multiverse"
+
+    - name: Install MongoDB
+      ansible.builtin.apt:
+        name: mongodb-org
+        update_cache: true
+
+    - name: Write mongod.conf
+      ansible.builtin.copy:
+        dest: /etc/mongod.conf
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+          systemLog:
+            destination: file
+            path: /var/log/mongodb/mongod.log
+            logAppend: true
+          net:
+            port: 27017
+            bindIp: 127.0.0.1,{{ mongo_private_ip }}
+          replication:
+            replSetName: rs0
+      register: conf
+
+    - name: Start MongoDB
+      ansible.builtin.systemd:
+        name: mongod
+        enabled: true
+        state: started
+
+    - name: Restart MongoDB only if the config changed
+      ansible.builtin.systemd:
+        name: mongod
+        state: restarted
+      when: conf.changed
+
+    - name: Wait for MongoDB port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 27017
+        timeout: 60
+
+    # ---------- the rest runs on node 1 only ----------
+    - name: Set up the replica set
+      when: mongo_node_index == '1'
+      block:
+        - name: Build member list from the live inventory
+          ansible.builtin.set_fact:
+            rs_members: >-
+              {% for h in groups['role_mongodb'] -%}
+              {_id: {{ loop.index0 }}, host: '{{ hostvars[h].mongo_private_ip }}:27017'}{{ ',' if not loop.last else '' }}
+              {%- endfor %}
+
+        - name: Check if the replica set already exists
+          ansible.builtin.command:
+            argv: [mongosh, --quiet, --eval, 'print(db.hello().setName || "none")']
+          register: rs_name
+          changed_when: false
+
+        - name: Initiate replica set
+          ansible.builtin.command:
+            argv:
+              - mongosh
+              - --quiet
+              - --eval
+              - "rs.initiate({_id: 'rs0', members: [{{ rs_members }}]})"
+          when: rs_name.stdout | trim == 'none'
+
+        - name: Wait until the replica set has a PRIMARY
+          ansible.builtin.command:
+            argv: [mongosh, --quiet, --eval, 'print(db.hello().primary || "none")']
+          register: primary
+          until: primary.stdout | trim != 'none'
+          retries: 30
+          delay: 5
+          changed_when: false
+
+        - name: Insert a demo document
+          ansible.builtin.command:
+            argv:
+              - mongosh
+              - "mongodb://{{ mongo_private_ip }}:27017/?replicaSet=rs0"
+              - --quiet
+              - --eval
+              - "db.getSiblingDB('demo').docs.updateOne({_id: 1}, {$set: {msg: 'hello from replica set'}}, {upsert: true})"
+          changed_when: false
+
+        - name: Show replica set members
+          ansible.builtin.command:
+            argv:
+              - mongosh
+              - --quiet
+              - --eval
+              - "rs.status().members.forEach(m => print(m.name + ' -> ' + m.stateStr))"
+          register: status
+          changed_when: false
+
+        - name: Result
+          ansible.builtin.debug:
+            msg: "{{ status.stdout_lines }}"

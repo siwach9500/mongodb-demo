@@ -1,0 +1,41 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+
+# Ansible
+*.retry
+.ansible/
+
+# Python virtual environments
+ansible-venv/
+venv/
+.venv/
+__pycache__/
+
+# Local backup dumps (real backups live in S3)
+*.gz
+*.archive
+dump/
+
+# AWS credentials and secrets (never commit these)
+.aws/
+*.pem
+*.key
+.env
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

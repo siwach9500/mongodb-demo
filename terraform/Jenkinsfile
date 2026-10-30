@@ -1,0 +1,56 @@
+pipeline {
+  agent any
+
+  parameters {
+    choice(name: 'ACTION', choices: ['apply', 'destroy'], description: 'Create or delete everything')
+  }
+
+  environment {
+    AWS_DEFAULT_REGION = 'ap-south-1'
+    PATH = "/var/lib/jenkins/ansible-venv/bin:${env.PATH}"
+  }
+
+  options { disableConcurrentBuilds() }
+
+  stages {
+    stage('Terraform') {
+      steps {
+        dir('terraform') {
+          sh 'terraform init -input=false'
+          sh "terraform ${params.ACTION} -auto-approve -input=false"
+        }
+      }
+    }
+
+    stage('Wait for SSM') {
+      when { expression { params.ACTION == 'apply' } }
+      steps {
+        dir('terraform') {
+          sh '''
+            IDS=$(terraform output -json instance_ids | jq -r 'join(",")')
+            for i in $(seq 1 40); do
+              ONLINE=$(aws ssm describe-instance-information \
+                --filters "Key=InstanceIds,Values=$IDS" \
+                --query 'length(InstanceInformationList[?PingStatus==`Online`])' \
+                --output text)
+              echo "SSM online: $ONLINE / 3"
+              [ "$ONLINE" = "3" ] && exit 0
+              sleep 15
+            done
+            exit 1
+          '''
+        }
+      }
+    }
+
+    stage('Ansible') {
+      when { expression { params.ACTION == 'apply' } }
+      steps {
+        dir('ansible') {
+          sh 'ansible-inventory --graph'   // shows the live instances found
+          sh 'ansible-playbook site.yml'
+        }
+      }
+    }
+  }
+}
