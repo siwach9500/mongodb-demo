@@ -5,7 +5,7 @@ terraform {
 
   # Remote state in S3, with a lock in DynamoDB
   backend "s3" {
-    bucket         = "mongo-demo-assets"   # CHANGE
+    bucket         = "mongo-demo-assets"
     key            = "mongo-demo/terraform.tfstate"
     region         = "ap-south-1"
     dynamodb_table = "mongo-demo-lock"
@@ -16,15 +16,15 @@ terraform {
 provider "aws" {
   region = "ap-south-1"
   default_tags {
-    tags = { Project = "mongo-demo" }   # the inventory finds servers by this tag
+    tags = { Project = "mongo-demo" }
   }
 }
 
 locals {
-  bucket = "mongo-demo-assets"   # CHANGE (same as the backend bucket)
+  bucket = "mongo-demo-assets"
 }
 
-# ---------- network: default VPC ----------
+# ---------- network: default VPC, default subnets only ----------
 data "aws_vpc" "default" {
   default = true
 }
@@ -100,7 +100,11 @@ resource "aws_iam_role_policy" "backup" {
 
 resource "aws_iam_instance_profile" "mongo" {
   name_prefix = "mongo-demo-"
-  rresource "terraform_data" "wait_for_iam" {
+  role        = aws_iam_role.mongo.name
+}
+
+# Give AWS 60 seconds to spread the new role before the servers boot
+resource "terraform_data" "wait_for_iam" {
   depends_on = [
     aws_iam_instance_profile.mongo,
     aws_iam_role_policy_attachment.ssm,
@@ -110,13 +114,12 @@ resource "aws_iam_instance_profile" "mongo" {
   provisioner "local-exec" {
     command = "sleep 60"
   }
-}ole        = aws_iam_role.mongo.name
 }
 
 # ---------- 3 MongoDB servers ----------
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["099720109477"]   # Canonical
+  owners      = ["099720109477"] # Canonical
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
@@ -131,27 +134,15 @@ resource "aws_instance" "mongo" {
   subnet_id                   = data.aws_subnets.default.ids[count.index]
   vpc_security_group_ids      = [aws_security_group.mongo.id]
   iam_instance_profile        = aws_iam_instance_profile.mongo.name
-  associate_public_ip_address = true   # outbound internet only (SSM + apt)
+  associate_public_ip_address = true # outbound internet only (SSM + apt)
 
-  depends_on = [aws_iam_role_policy_attachment.ssm]
+  depends_on = [terraform_data.wait_for_iam]
 
   tags = {
     Name      = "mongo-${count.index + 1}"
     Role      = "mongodb"
     NodeIndex = tostring(count.index + 1)
     SsmBucket = local.bucket
-  }
-}
-
-resource "terraform_data" "wait_for_iam" {
-  depends_on = [
-    aws_iam_instance_profile.mongo,
-    aws_iam_role_policy_attachment.ssm,
-    aws_iam_role_policy.backup,
-  ]
-
-  provisioner "local-exec" {
-    command = "sleep 60"
   }
 }
 
