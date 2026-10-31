@@ -34,6 +34,10 @@ data "aws_subnets" "default" {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
 }
 
 resource "aws_security_group" "mongo" {
@@ -96,7 +100,17 @@ resource "aws_iam_role_policy" "backup" {
 
 resource "aws_iam_instance_profile" "mongo" {
   name_prefix = "mongo-demo-"
-  role        = aws_iam_role.mongo.name
+  rresource "terraform_data" "wait_for_iam" {
+  depends_on = [
+    aws_iam_instance_profile.mongo,
+    aws_iam_role_policy_attachment.ssm,
+    aws_iam_role_policy.backup,
+  ]
+
+  provisioner "local-exec" {
+    command = "sleep 60"
+  }
+}ole        = aws_iam_role.mongo.name
 }
 
 # ---------- 3 MongoDB servers ----------
@@ -126,6 +140,18 @@ resource "aws_instance" "mongo" {
     Role      = "mongodb"
     NodeIndex = tostring(count.index + 1)
     SsmBucket = local.bucket
+  }
+}
+
+resource "terraform_data" "wait_for_iam" {
+  depends_on = [
+    aws_iam_instance_profile.mongo,
+    aws_iam_role_policy_attachment.ssm,
+    aws_iam_role_policy.backup,
+  ]
+
+  provisioner "local-exec" {
+    command = "sleep 60"
   }
 }
 

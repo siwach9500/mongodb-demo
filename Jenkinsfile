@@ -35,7 +35,9 @@ pipeline {
                   --filters Key=InstanceIds,Values=$IDS \
                   --query 'length(InstanceInformationList[?PingStatus==`Online`])' \
                   --output text)" = "3" ]; do
-                echo "waiting for 3 servers to come online in SSM..."
+                echo "waiting for 3 servers to come online in SSM. Online now:"
+                aws ssm describe-instance-information --filters Key=InstanceIds,Values=$IDS \
+                  --query 'InstanceInformationList[].[InstanceId,PingStatus]' --output text
                 sleep 15
               done
             '''
